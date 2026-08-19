@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+
+metadata:
+  name: platforms-mssql-claim
+
+spec:
+  accessModes:
+    - ReadWriteOnce
+
+  resources:
+    requests:
+      storage: 300Mi
+
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+
+metadata:
+  name: commands-mssql-claim
+
+spec:
+  accessModes:
+    - ReadWriteOnce
+
+  resources:
+    requests:
+      storage: 300Mi
+
+  storageClassName: standard

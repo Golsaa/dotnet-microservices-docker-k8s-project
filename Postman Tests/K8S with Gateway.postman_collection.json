@@ -1,0 +1,132 @@
+{
+  "info": {
+    "_postman_id": "b3b931ab-53e7-4e21-b3d2-f3656191c2e0",
+    "name": "K8S with Gateway",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "57362747"
+  },
+  "item": [
+    {
+      "name": "Get Platforms",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:32015/api/Platforms",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "32015",
+          "path": [
+            "api",
+            "Platforms"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Get Platforms Copy",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://microservices.local:8888/api/platforms",
+          "protocol": "http",
+          "host": [
+            "microservices",
+            "local"
+          ],
+          "port": "8888",
+          "path": [
+            "api",
+            "platforms"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Get An Specific Platform",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:32015/api/Platforms/3",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "32015",
+          "path": [
+            "api",
+            "Platforms",
+            "3"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Create A New Platform",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"name\": \"Gold\",\r\n    \"publisher\": \"Gold corp.\",\r\n    \"cost\": \"Free\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://microservices.local:8888/api/platforms",
+          "protocol": "http",
+          "host": [
+            "microservices",
+            "local"
+          ],
+          "port": "8888",
+          "path": [
+            "api",
+            "platforms"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Create A New Platform Copy",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"name\": \"Test\",\r\n    \"publisher\": \"Test posting a new platform\",\r\n    \"cost\": \"Free\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:32015/api/Platforms/",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "32015",
+          "path": [
+            "api",
+            "Platforms",
+            ""
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}
