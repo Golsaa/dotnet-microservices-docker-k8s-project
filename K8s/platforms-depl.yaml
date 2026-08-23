@@ -20,6 +20,13 @@ spec:
       containers:
         - name: platformservice
           image: gomore2/platformservice:v2
+
+          env:
+            - name: Kafka__BootstrapServers
+              value: "kafka-clusterip-srv:9092"
+
+            - name: Kafka__Topic
+              value: "platform-published"
 ---
 apiVersion: v1
 kind: Service

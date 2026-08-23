@@ -58,4 +58,10 @@ public class CommandRepo : ICommandRepo
     {
         return (_context.SaveChanges() >= 0 );
     }
+
+    public bool ExternalPlatformExists(int platformId)
+    {
+        return _context.Platforms.Any(p => p.ExternalId == platformId);
+    }
+
 }

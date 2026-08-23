@@ -29,7 +29,7 @@ public static class PrepDb
                 //GetRequiredService VS GetService:
                 //GetService<AppDbContext>() can return null, while GetRequiredService<AppDbContext>() 
                 //immediately tells you if you've forgotten to register the context. 
-                SeedData(serviceScope.ServiceProvider.GetRequiredService<AppDbContext>());
+                //SeedData(serviceScope.ServiceProvider.GetRequiredService<AppDbContext>());
             }
         }
 
