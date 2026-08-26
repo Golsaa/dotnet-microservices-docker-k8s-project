@@ -1,6 +1,8 @@
 using Confluent.Kafka;
 using PlatformService.Dtos;
 using System.Text.Json;
+using System.Text;
+using Microservices.Contracts.Kafka;
 
 namespace PlatformService.AsyncDataServices
 {
@@ -11,7 +13,7 @@ namespace PlatformService.AsyncDataServices
 
         public KafkaMessageBusClient(IConfiguration configuration)
         {
-            var bootstrapServers = configuration["Kafka:BootstrapServers"] ?? 
+            var bootstrapServers = configuration["Kafka:BootstrapServers"] ??
                                      throw new InvalidOperationException("Kafka BootstrapServers is not configured.");
 
             _topic = configuration["Kafka:Topic"] ?? "platform-published";
@@ -32,27 +34,50 @@ namespace PlatformService.AsyncDataServices
             _producer = new ProducerBuilder<string, string>(config).Build();
         }
 
-        public async Task PublishNewPlatformAsync(PlatformPublishedDto platformPublishedDto)
+        public async Task PublishNewPlatformAsync(PlatformPublishedDto platformPublishedDto, string correlationId,
+                                                    CancellationToken cancellationToken = default)
         {
             platformPublishedDto.Event = "Platform_Published";
+            var eventId = Guid.NewGuid().ToString("N");
+            var eventType = "PlatformPublished.v1";
 
-            var message = JsonSerializer.Serialize(platformPublishedDto);
+
+            var messageValue = JsonSerializer.Serialize(platformPublishedDto);
+            var headers = new Headers
+                {
+                    {
+                        "correlation-id",
+                        Encoding.UTF8.GetBytes(correlationId)
+                    },
+                    {
+                        "event-id",
+                        Encoding.UTF8.GetBytes(eventId)
+                    },
+                    {
+                        "event-type",
+                        Encoding.UTF8.GetBytes(eventType)
+                    }
+                };
+
+
+            var message = new Message<string, string>
+            {
+                Key = platformPublishedDto.Id.ToString(),
+                Value = messageValue,
+                Headers = headers
+            };
 
             try
             {
-                var result = await _producer.ProduceAsync(
-                    _topic,
-                    new Message<string, string>
-                    {
-                        // Same platform goes to same partition
-                        Key = platformPublishedDto.Id.ToString(),
-                        Value = message
-                    });
+                var result = await _producer.ProduceAsync(_topic, message, cancellationToken);
 
-                Console.WriteLine($"--> Kafka message published " +
-                    $"Topic: {result.Topic}, " +
-                    $"Partition: {result.Partition}, " +
-                    $"Offset: {result.Offset}");
+                Console.WriteLine("Published {_topic} event. PlatformId={PlatformId}, Topic={Topic}, Partition={Partition}, Offset={Offset}, CorrelationId={CorrelationId}",
+                _topic,
+                platformPublishedDto.Id,
+                result.Topic,
+                result.Partition.Value,
+                result.Offset.Value,
+                correlationId);
             }
             ////ProduceException<string, string>  Represents an error that occured whilst producing a message.
             catch (ProduceException<string, string> ex)

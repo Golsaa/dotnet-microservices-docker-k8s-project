@@ -60,21 +60,24 @@ namespace PlatformService.Controllers
             var platformReadDto = _mapper.Map<PlatformReadDto>(platformModel);
 
             //Send Sync Message
-            try
+            /*try
             {
                await _commandDataClient.SendPlatformToCommand(platformReadDto);
             }
             catch(Exception ex)
             {
                 Console.WriteLine( $"--> Could not send synchronously: {ex.Message}");
-            }
+            }*/
 
             //Send Async MEssage
             try
             {
                var platformPublishedDto = _mapper.Map<PlatformPublishedDto>(platformReadDto);
                platformPublishedDto.Event = "Platform_Published";
-               await _messageBusClient.PublishNewPlatformAsync(platformPublishedDto);
+
+               var correlationId = HttpContext.TraceIdentifier;
+
+               await _messageBusClient.PublishNewPlatformAsync(platformPublishedDto, correlationId);
             }
             catch(Exception ex)
             {

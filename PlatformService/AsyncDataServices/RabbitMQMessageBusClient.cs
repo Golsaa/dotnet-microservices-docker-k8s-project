@@ -242,10 +242,8 @@ namespace PlatformService.AsyncDataServices
                 cancellationToken: cancellationToken);
         }
 
-        public async Task PublishNewPlatformAsync(PlatformPublishedDto platformPublishedDto)
+        public async Task PublishNewPlatformAsync(PlatformPublishedDto platformPublishedDto, string correlationId, CancellationToken cancellationToken = default)
         {
-            var cancellationToken = _shutdownCts.Token;
-
             /*
              * One publisher at a time because the same IChannel
              * is shared by this singleton.

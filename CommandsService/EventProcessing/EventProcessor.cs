@@ -13,9 +13,9 @@ namespace CommandsService.EventProcessing
         private readonly ILogger<EventProcessor> _logger;
 
         private readonly JsonSerializerOptions _jsonOptions = new()
-            {
-                PropertyNameCaseInsensitive = true
-            };
+        {
+            PropertyNameCaseInsensitive = true
+        };
 
         public EventProcessor(ICommandRepo repository, IMapper mapper, ILogger<EventProcessor> logger)
         {
@@ -24,14 +24,14 @@ namespace CommandsService.EventProcessing
             _logger = logger;
         }
 
-        public void ProcessEvent(string message)
+        public void ProcessEvent(string message, string? eventTypeHeader)
         {
+            var eventType = DetermineEventType(eventTypeHeader);
+
             if (string.IsNullOrWhiteSpace(message))
             {
                 throw new ArgumentException("Kafka message cannot be empty.", nameof(message));
             }
-
-            var eventType = DetermineEventType(message);
 
             switch (eventType)
             {
@@ -42,37 +42,30 @@ namespace CommandsService.EventProcessing
 
                 case EventType.Undetermined:
 
-                    _logger.LogWarning("Could not determine Kafka event type. Message: {Message}",message);
+                    _logger.LogWarning("Could not determine Kafka event type. Message: {Message}", message);
                     break;
 
                 default:
 
-                    _logger.LogWarning("Unhandled Kafka event type: {EventType}",eventType);
+                    _logger.LogWarning("Unhandled Kafka event type: {EventType}", eventType);
                     break;
             }
         }
 
-
-        private EventType DetermineEventType(string notificationMessage)
+        private EventType DetermineEventType(string? eventTypeHeader)
         {
             try
             {
-                var eventDto = JsonSerializer.Deserialize<GenericEventDto>(notificationMessage, _jsonOptions);
-
-                if (eventDto == null)
+                return eventTypeHeader switch
                 {
-                    return EventType.Undetermined;
-                }
-
-                return eventDto.Event switch
-                {
-                    "Platform_Published" => EventType.PlatformPublished,
+                    "PlatformPublished.v1" => EventType.PlatformPublished,
                     _ => EventType.Undetermined
                 };
+
             }
             catch (JsonException ex)
             {
-                _logger.LogError( ex, "Unable to deserialize Kafka event.");
+                _logger.LogError(ex, "Unable to deserialize Kafka event.");
                 throw;
             }
         }
@@ -89,8 +82,7 @@ namespace CommandsService.EventProcessing
             var platformModel = _mapper.Map<Platform>(platformPublishedDto);
 
             // Idempotency check
-            if (_repository.ExternalPlatformExists(
-                    platformModel.ExternalId))
+            if (_repository.ExternalPlatformExists(platformModel.ExternalId))
             {
                 _logger.LogInformation("Platform {ExternalPlatformId} already exists. Skipping duplicate Kafka event.",
                     platformModel.ExternalId);

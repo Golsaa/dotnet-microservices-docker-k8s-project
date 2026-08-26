@@ -1,8 +1,10 @@
 using System.Text.Json;
+using System.Text;
 using CommandsService.EventProcessing;
 using Confluent.Kafka;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microservices.Contracts.Kafka;
 
 namespace CommandsService.AsyncDataServices
 {
@@ -31,80 +33,10 @@ namespace CommandsService.AsyncDataServices
             return Task.Run(() => ConsumeAsync(stoppingToken), stoppingToken);
         }
 
-        private void Consume1(CancellationToken stoppingToken)
-        {
-            var bootstrapServers = _configuration["Kafka:BootstrapServers"]?? throw new InvalidOperationException("Kafka BootstrapServers is missing.");
-
-            var topic = _configuration["Kafka:Topic"] ?? "platform-published";
-
-            var config = new ConsumerConfig
-            {
-                BootstrapServers = bootstrapServers,
-                GroupId = "commands-service",
-                AutoOffsetReset = AutoOffsetReset.Earliest,
-
-                // Important: we'll commit only after successful processing
-                EnableAutoCommit = false
-            };
-
-            using var consumer = new ConsumerBuilder<Ignore, string>(config).Build();
-
-            consumer.Subscribe(topic);
-
-            _logger.LogInformation("Kafka consumer subscribed to {Topic}", topic);
-
-            try
-            {
-                while (!stoppingToken.IsCancellationRequested)
-                {
-                    var result = consumer.Consume(stoppingToken);
-
-                    try
-                    {
-                        _logger.LogInformation("Kafka message received Partition={Partition} Offset={Offset}",
-                            result.Partition, result.Offset);
-
-                        using var scope = _scopeFactory.CreateScope();
-
-                        var eventProcessor = scope.ServiceProvider.GetRequiredService<IEventProcessor>();
-
-                        // Reuse your EXISTING event processing logic.
-                        eventProcessor.ProcessEvent(result.Message.Value);
-
-                        // Only commit after processing succeeded.
-                        consumer.Commit(result);
-
-                        _logger.LogInformation("Kafka offset committed: {Offset}",
-                            result.Offset);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error processing Kafka event.");
-
-                        // Do NOT commit.
-                        // Later we'll add:
-                        // retry
-                        // exponential backoff
-                        // DLQ
-                        // circuit breaker
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // normal application shutdown
-            }
-            finally
-            {
-                consumer.Close();
-            }
-        }
-    
-
-    //####################################
+        //####################################
         private async Task ConsumeAsync(CancellationToken stoppingToken)
         {
-            var bootstrapServers =_configuration["Kafka:BootstrapServers"]
+            var bootstrapServers = _configuration["Kafka:BootstrapServers"]
                 ?? throw new InvalidOperationException("Kafka BootstrapServers is missing.");
 
             var topic = _configuration["Kafka:Topic"]
@@ -165,100 +97,102 @@ namespace CommandsService.AsyncDataServices
                     try
                     {
                         result = consumer.Consume(stoppingToken);
+
                     }
                     catch (ConsumeException ex)
                     {
-                        _logger.LogError(ex,"Kafka consume error.");
+                        _logger.LogError(ex, "Kafka consume error.");
 
-                        await Task.Delay( 1000, stoppingToken);
+                        await Task.Delay(1000, stoppingToken);
                         continue;
                     }
 
-                    _logger.LogInformation("Kafka message received. " + "Topic={Topic} Partition={Partition} Offset={Offset}",
-                        result.Topic,
-                        result.Partition,
-                        result.Offset);
+                    var correlationId = GetCorrelationId(result.Message.Headers);
+                    var eventId = GetEventId(result);
+                    var eventType = GetHeaderValue(result.Message.Headers, KafkaHeaderNames.EventType) ?? "unknown";
 
-                    // ============================================
-                    // PROCESS WITH RETRY
-                    // ============================================
-                    var processingResult = await ProcessWithRetryAsync(
-                            result.Message.Value,
-                            stoppingToken);
-
-                    switch (processingResult.Status)
+                    using (_logger.BeginScope(new Dictionary<string, object>
                     {
-                        // ========================================
-                        // SUCCESS
-                        // ========================================
-                        case ProcessingStatus.Success:
+                        ["CorrelationId"] = correlationId,
+                        ["KafkaTopic"] = result.Topic,
+                        ["KafkaPartition"] = result.Partition.Value,
+                        ["KafkaOffset"] = result.Offset.Value
+                    }))
+                    {
+                        _logger.LogInformation("Received Kafka event");
+
+                        // ============================================
+                        // PROCESS WITH RETRY
+                        // ============================================
+                        var processingResult = await ProcessWithRetryAsync(result.Message.Value, eventType, stoppingToken);
+
+                        switch (processingResult.Status)
                         {
-                            CommitOrSeek( consumer, result);
+                            // ========================================
+                            // SUCCESS
+                            // ========================================
+                            case ProcessingStatus.Success:
+                                {
+                                    CommitOrSeek(consumer, result);
 
-                            if (_circuitState == CircuitState.HalfOpen)
-                            {
-                                CloseCircuit();
-                            }
-                            break;
-                        }
+                                    if (_circuitState == CircuitState.HalfOpen)
+                                    {
+                                        CloseCircuit();
+                                    }
+                                    break;
+                                }
 
-                        // ========================================
-                        // PERMANENT / POISON MESSAGE
-                        // ========================================
+                            // ========================================
+                            // PERMANENT / POISON MESSAGE
+                            // ========================================
 
-                        case ProcessingStatus.PermanentFailure:
-                        {
-                            _logger.LogError(processingResult.Exception,
-                                "Permanent Kafka message failure. " +
-                                "Sending event to DLQ.");
+                            case ProcessingStatus.PermanentFailure:
+                                {
+                                    _logger.LogError(processingResult.Exception, "Permanent Kafka message failure. Sending event to DLQ.");
 
-                            var dlqPublished =
-                                await PublishToDlqAsync(
-                                    dlqProducer,
-                                    dlqTopic,
-                                    result,
-                                    processingResult.Exception!,
-                                    processingResult.Attempts,
-                                    stoppingToken);
+                                    var dlqPublished = await PublishToDlqAsync(
+                                            dlqProducer,
+                                            dlqTopic,
+                                            result,
+                                            correlationId,
+                                            processingResult.Exception!,
+                                            processingResult.Attempts,
+                                            stoppingToken);
 
-                            if (dlqPublished)
-                            {
-                                // Important: Only commit the original record AFTER the DLQ write succeeds.
-                                CommitOrSeek( consumer, result);
-                            }
-                            else
-                            {
-                                // DLQ itself failed.
-                                // Rewind the consumer so this event will be seen again.
+                                    if (dlqPublished)
+                                    {
+                                        // Important: Only commit the original record AFTER the DLQ write succeeds.
+                                        CommitOrSeek(consumer, result);
+                                    }
+                                    else
+                                    {
+                                        // DLQ itself failed.
+                                        // Rewind the consumer so this event will be seen again.
+                                        SeekSafely(consumer, result.TopicPartitionOffset);
+                                        _logger.LogWarning("DLQ publish failed. Original event will be retried.");
+                                        await Task.Delay(2000, stoppingToken);
+                                    }
 
-                                SeekSafely( consumer, result.TopicPartitionOffset);
+                                    break;
+                                }
 
-                                _logger.LogWarning( "DLQ publish failed. " +
-                                    "Original event will be retried.");
+                            // ========================================
+                            // TRANSIENT FAILURE
+                            // ========================================
 
-                                await Task.Delay( 2000,stoppingToken);
-                            }
+                            case ProcessingStatus.TransientFailure:
+                                {
+                                    _logger.LogError(processingResult.Exception,
+                                        "Transient dependency failure continued after retries. " +
+                                        "Opening circuit breaker.");
 
-                            break;
-                        }
-
-                        // ========================================
-                        // TRANSIENT FAILURE
-                        // ========================================
-
-                        case ProcessingStatus.TransientFailure:
-                        {
-                            _logger.LogError(processingResult.Exception,
-                                "Transient dependency failure " +
-                                "continued after retries. " +
-                                "Opening circuit breaker.");
-
-                            // VERY IMPORTANT:
-                            // Consume() has already moved the consumer's local position forward.
-                            // Since this event FAILED, rewind back to the failed offset.
-                            SeekSafely(consumer,result.TopicPartitionOffset);
-                            OpenCircuit(consumer);
-                            break;
+                                    // VERY IMPORTANT:
+                                    // Consume() has already moved the consumer's local position forward.
+                                    // Since this event FAILED, rewind back to the failed offset.
+                                    SeekSafely(consumer, result.TopicPartitionOffset);
+                                    OpenCircuit(consumer);
+                                    break;
+                                }
                         }
                     }
                 }
@@ -272,12 +206,45 @@ namespace CommandsService.AsyncDataServices
                 consumer.Close();
             }
         }
-    // ========================================================
-    // RETRY + EXPONENTIAL BACKOFF
-    // ========================================================
-        private async Task<ProcessingResult>ProcessWithRetryAsync(string message, CancellationToken stoppingToken)
+        private static string GetCorrelationId(Headers? headers)
         {
-            var maxAttempts = Math.Max(1,GetIntConfiguration("Kafka:Retry:MaxAttempts",4));
+            if (headers is not null && headers.TryGetLastBytes(KafkaHeaderNames.CorrelationId,
+                    out var correlationBytes) && correlationBytes is not null)
+            {
+                return Encoding.UTF8.GetString(correlationBytes);
+            }
+
+            // Older producer / missing header.
+            return Guid.NewGuid().ToString("N");
+        }
+
+        private static string GetEventId(ConsumeResult<Ignore, string> result)
+        {
+            var eventId = GetHeaderValue(result.Message.Headers, KafkaHeaderNames.EventId);
+
+            if (!string.IsNullOrWhiteSpace(eventId))
+            {
+                return eventId;
+            }
+
+            return
+                $"{result.Topic}:" + $"{result.Partition.Value}:" + $"{result.Offset.Value}";
+        }
+        private static string? GetHeaderValue(Headers? headers, string headerName)
+        {
+            if (headers is not null && headers.TryGetLastBytes(headerName, out var bytes) && bytes is not null)
+            {
+                return Encoding.UTF8.GetString(bytes);
+            }
+
+            return null;
+        }
+        // ========================================================
+        // RETRY + EXPONENTIAL BACKOFF
+        // ========================================================
+        private async Task<ProcessingResult> ProcessWithRetryAsync(string message, string eventType, CancellationToken stoppingToken)
+        {
+            var maxAttempts = Math.Max(1, GetIntConfiguration("Kafka:Retry:MaxAttempts", 4));
 
             var baseDelayMs = GetIntConfiguration("Kafka:Retry:BaseDelayMs", 500);
 
@@ -292,9 +259,10 @@ namespace CommandsService.AsyncDataServices
                     using var scope = _scopeFactory.CreateScope();
 
                     var eventProcessor = scope.ServiceProvider.GetRequiredService<IEventProcessor>();
-                    eventProcessor.ProcessEvent(message);
 
-                    return new ProcessingResult(ProcessingStatus.Success,  null,attempt);
+                    eventProcessor.ProcessEvent(message, eventType);
+
+                    return new ProcessingResult(ProcessingStatus.Success, null, attempt);
                 }
                 catch (OperationCanceledException)
                     when (stoppingToken.IsCancellationRequested)
@@ -306,7 +274,7 @@ namespace CommandsService.AsyncDataServices
                 {
                     if (attempt == maxAttempts)
                     {
-                        return new ProcessingResult(ProcessingStatus.TransientFailure,  ex, attempt);
+                        return new ProcessingResult(ProcessingStatus.TransientFailure, ex, attempt);
                     }
 
                     // ----------------------------------------
@@ -318,13 +286,13 @@ namespace CommandsService.AsyncDataServices
                     // plus jitter
 
                     var exponentialDelay = baseDelayMs * Math.Pow(2, attempt - 1);
-                    var delayMs = Math.Min( maxDelayMs, exponentialDelay);
+                    var delayMs = Math.Min(maxDelayMs, exponentialDelay);
 
                     // Jitter prevents many consumers from retrying at exactly the same moment.
 
-                    delayMs += Random.Shared.Next(0,250);
+                    delayMs += Random.Shared.Next(0, 250);
 
-                    _logger.LogWarning( ex,
+                    _logger.LogWarning(ex,
                         "Transient failure processing Kafka event. " +
                         "Attempt {Attempt}/{MaxAttempts}. " +
                         "Retrying in {DelayMs} ms.",
@@ -377,7 +345,7 @@ namespace CommandsService.AsyncDataServices
             // Sometimes networking/database errors are nested another level down.
             if (exception.InnerException != null)
             {
-                return IsTransient( exception.InnerException);
+                return IsTransient(exception.InnerException);
             }
 
             return false;
@@ -432,7 +400,7 @@ namespace CommandsService.AsyncDataServices
             // Do NOT simply Thread.Sleep(30 seconds).
             try
             {
-                var unexpectedResult = consumer.Consume( TimeSpan.FromMilliseconds(250));
+                var unexpectedResult = consumer.Consume(TimeSpan.FromMilliseconds(250));
 
                 // Normally nothing should be returned because the assigned partitions are paused.
                 // This also protects us against assignment changes/rebalances.
@@ -452,7 +420,7 @@ namespace CommandsService.AsyncDataServices
                 _logger.LogWarning(ex, "Kafka polling error while circuit is open.");
             }
 
-            var openFor =  DateTimeOffset.UtcNow - _circuitOpenedAtUtc;
+            var openFor = DateTimeOffset.UtcNow - _circuitOpenedAtUtc;
 
             if (openFor < openDuration)
             {
@@ -472,13 +440,13 @@ namespace CommandsService.AsyncDataServices
                 consumer.Resume(partitions);
             }
 
-            _logger.LogInformation( "Circuit breaker HALF-OPEN. " +  "Allowing one processing attempt.");
+            _logger.LogInformation("Circuit breaker HALF-OPEN. " + "Allowing one processing attempt.");
         }
 
         private void CloseCircuit()
         {
             _circuitState = CircuitState.Closed;
-            _logger.LogInformation("Circuit breaker CLOSED. " +  "Dependency is healthy again.");
+            _logger.LogInformation("Circuit breaker CLOSED. " + "Dependency is healthy again.");
         }
 
         // ========================================================
@@ -488,6 +456,7 @@ namespace CommandsService.AsyncDataServices
             IProducer<string, string> producer,
             string dlqTopic,
             ConsumeResult<Ignore, string> originalMessage,
+            string correlationId,
             Exception exception,
             int processingAttempts,
             CancellationToken stoppingToken)
@@ -499,60 +468,50 @@ namespace CommandsService.AsyncDataServices
                 $"{originalMessage.Partition.Value}-" +
                 $"{originalMessage.Offset.Value}";
 
-            var dlqPayload =
-                JsonSerializer.Serialize(
+            var dlqPayload = JsonSerializer.Serialize(
                     new
                     {
                         id = messageId,
-
-                        originalTopic =  originalMessage.Topic,
-
+                        originalTopic = originalMessage.Topic,
                         originalPartition = originalMessage.Partition.Value,
-
-                        originalOffset =  originalMessage.Offset.Value,
-
+                        originalOffset = originalMessage.Offset.Value,
                         payload = originalMessage.Message.Value,
-
                         processingAttempts,
-
-                        errorType =  exception.GetType().FullName,
-
-                        errorMessage =  exception.Message,
-
-                        failedAtUtc =   DateTimeOffset.UtcNow,
-
+                        errorType = exception.GetType().FullName,
+                        errorMessage = exception.Message,
+                        failedAtUtc = DateTimeOffset.UtcNow,
                         consumerGroup = "commands-service"
                     });
 
-
-            for (var attempt = 1; attempt <= maxDlqAttempts;  attempt++)
+            for (var attempt = 1; attempt <= maxDlqAttempts; attempt++)
             {
                 try
                 {
-                    var deliveryResult =
-                        await producer.ProduceAsync(dlqTopic,
+                    var deliveryResult = await producer.ProduceAsync(dlqTopic,
                             new Message<string, string>
                             {
                                 // Deterministic identifier based
                                 // on original Kafka location.
                                 Key = messageId,
-                                Value = dlqPayload
+                                Value = dlqPayload,
+                                Headers = new Headers{
+                                    {
+                                        KafkaHeaderNames.CorrelationId,
+                                        Encoding.UTF8.GetBytes(correlationId)
+                                    }
+                                }
                             },
                             stoppingToken);
 
-                    _logger.LogWarning(
-                        "Event published to DLQ {DlqTopic}. " +
-                        "DLQOffset={Offset}. " +
-                        "Original={OriginalLocation}",
-                        dlqTopic,
-                        deliveryResult.Offset,
-                        messageId);
+                    _logger.LogWarning("Kafka event published to DLQ {DlqTopic} at offset {DlqOffset}",
+                            dlqTopic,
+                            deliveryResult.Offset);
 
                     return true;
                 }
                 catch (ProduceException<string, string> ex)
                 {
-                    _logger.LogError( ex,
+                    _logger.LogError(ex,
                         "Failed publishing to DLQ. " +
                         "Attempt {Attempt}/{MaxAttempts}.",
                         attempt,
@@ -560,9 +519,9 @@ namespace CommandsService.AsyncDataServices
 
                     if (attempt < maxDlqAttempts)
                     {
-                        var delay = TimeSpan.FromMilliseconds(500 * Math.Pow( 2, attempt - 1));
+                        var delay = TimeSpan.FromMilliseconds(500 * Math.Pow(2, attempt - 1));
 
-                        await Task.Delay(  delay, stoppingToken);
+                        await Task.Delay(delay, stoppingToken);
                     }
                 }
             }
@@ -578,10 +537,7 @@ namespace CommandsService.AsyncDataServices
             {
                 consumer.Commit(result);
 
-                _logger.LogInformation("Kafka offset committed. " +
-                    "Partition={Partition} Offset={Offset}",
-                    result.Partition,
-                    result.Offset);
+                _logger.LogInformation("Kafka offset committed.");
             }
             catch (KafkaException ex)
             {
@@ -593,11 +549,11 @@ namespace CommandsService.AsyncDataServices
                 // Your EventProcessor should therefore
                 // remain idempotent.
 
-                _logger.LogError( ex,
+                _logger.LogError(ex,
                     "Kafka commit failed. " +
                     "Event may be processed again.");
 
-                SeekSafely(consumer,result.TopicPartitionOffset);
+                SeekSafely(consumer, result.TopicPartitionOffset);
             }
         }
 
@@ -615,7 +571,7 @@ namespace CommandsService.AsyncDataServices
             }
             catch (KafkaException ex)
             {
-                _logger.LogError( ex,
+                _logger.LogError(ex,
                     "Could not seek Kafka consumer to " +
                     "{TopicPartitionOffset}",
                     offset);
@@ -628,7 +584,7 @@ namespace CommandsService.AsyncDataServices
 
         private int GetIntConfiguration(string key, int defaultValue)
         {
-            return int.TryParse(_configuration[key],out var value)
+            return int.TryParse(_configuration[key], out var value)
                     ? value
                     : defaultValue;
         }

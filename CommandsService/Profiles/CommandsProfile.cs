@@ -9,15 +9,17 @@ namespace CommandsService.Profiles
         public CommandsProfile()
         {
             // Source -> Target
-           CreateMap<Platform, PlatformReadDto>();
-           CreateMap<CommandCreateDto, Command>();
-           CreateMap<Command, CommandReadDto>();
+            CreateMap<Platform, PlatformReadDto>();
+            CreateMap<CommandCreateDto, Command>();
+            CreateMap<Command, CommandReadDto>();
 
-           // Kafka event DTO -> Commands Service domain model
-           CreateMap<PlatformPublishedDto, Platform>().ForMember(
+            CreateMap<PlatformPublishedDto, Platform>().ForMember(
+                    dest => dest.Id,
+                    opt => opt.Ignore())
+                    .ForMember(
                     dest => dest.ExternalId,
                     opt => opt.MapFrom(src => src.Id));
-        }
-    }
+                            }
+                        }
 }
 

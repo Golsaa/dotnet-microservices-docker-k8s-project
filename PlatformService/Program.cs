@@ -2,14 +2,45 @@ using Microsoft.EntityFrameworkCore;
 using PlatformService.AsyncDataServices;
 using PlatformService.Data;
 using PlatformService.SyncDataServices.Http;
+using PlatformService.Middleware;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Logs;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var serviceName = "PlatformService";
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource
+        .AddService(serviceName: serviceName))
+    .WithMetrics(metrics => metrics
+        .AddAspNetCoreInstrumentation()
+        .AddRuntimeInstrumentation()
+        //.AddProcessInstrumentation()
+        .AddMeter(serviceName)
+        .AddOtlpExporter())
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddSource(serviceName)
+        .AddOtlpExporter());
+
+builder.Logging.AddOpenTelemetry(logging =>
+{
+    logging.IncludeFormattedMessage = true;
+    logging.IncludeScopes = true;
+    logging.ParseStateValues = true;
+
+    logging.AddOtlpExporter();
+});
+
+
 //if (builder.Environment.IsProduction())
 Console.WriteLine(" --> Using SQLServer Db");
-    builder.Services.AddDbContext<AppDbContext>(options =>
-        options.UseSqlServer(
-            builder.Configuration.GetConnectionString("PlatformsConn")));
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("PlatformsConn")));
 
 /*else
 {
@@ -38,6 +69,8 @@ builder.Services.AddControllers();
 Console.WriteLine($"--> Command Service URL: {builder.Configuration["CommandService"]}");
 
 var app = builder.Build();
+
+app.UseMiddleware<CorrelationIdMiddleware>();
 
 PrepDb.PrepPopulation(app, app.Environment);
 

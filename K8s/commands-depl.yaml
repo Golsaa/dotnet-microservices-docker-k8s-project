@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: commandservice
-          image: gomore2/commandservice:v1
+          image: gomore2/commandservice:v5
 
           env:
               - name: Kafka__BootstrapServers

@@ -1,0 +1,13 @@
+### kind-config.yaml  it is not a Kubernetes resource manifest.
+### kind create cluster --config .\K8s\kind-config.yaml — only use this when the Kind cluster itself does not exist.
+### Recreating the Kind cluster can remove cluster resource
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 32015
+        hostPort: 32015
+        protocol: TCP
