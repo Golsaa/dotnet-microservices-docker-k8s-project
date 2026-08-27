@@ -37,18 +37,8 @@ builder.Logging.AddOpenTelemetry(logging =>
     logging.AddOtlpExporter();
 });
 
-
-//if (builder.Environment.IsProduction())
 Console.WriteLine(" --> Using SQLServer Db");
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("PlatformsConn")));
-
-/*else
-{
-    Console.WriteLine(" --> Using InMem Db");
-    builder.Services.AddDbContext<AppDbContext>(options =>
-        options.UseInMemoryDatabase("InMem"));
-}*/
+builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString("PlatformsConn")));
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
@@ -59,10 +49,9 @@ builder.Services.AddScoped<IPlatformRepo, PlatformRepo>();
 //The Kafka producer registration should be a singleton, 
 //because IProducer is thread-safe, costly to create, and is correctly disposed when the application stops:
 builder.Services.AddSingleton<IMessageBusClient, KafkaMessageBusClient>();
+builder.Services.AddHostedService<OutboxProcessor>();
 
-builder.Services.AddAutoMapper(
-    cfg => { },
-    AppDomain.CurrentDomain.GetAssemblies()
+builder.Services.AddAutoMapper(cfg => { }, AppDomain.CurrentDomain.GetAssemblies()
 );
 builder.Services.AddHttpClient<ICommandDataClient, HttpCommandDataClient>();
 

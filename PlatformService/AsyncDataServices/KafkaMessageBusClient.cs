@@ -36,29 +36,18 @@ namespace PlatformService.AsyncDataServices
             _producer = new ProducerBuilder<string, string>(config).Build();
         }
 
-        public async Task PublishNewPlatformAsync(PlatformPublishedDto platformPublishedDto, string correlationId,
+        public async Task PublishNewPlatformAsync(PlatformPublishedDto platformPublishedDto, string correlationId, string eventId,
                                                     CancellationToken cancellationToken = default)
         {
             platformPublishedDto.Event = "Platform_Published";
-            var eventId = Guid.NewGuid().ToString("N");
             var eventType = "PlatformPublished.v1";
-
 
             var messageValue = JsonSerializer.Serialize(platformPublishedDto);
             var headers = new Headers
                 {
-                    {
-                        "correlation-id",
-                        Encoding.UTF8.GetBytes(correlationId)
-                    },
-                    {
-                        "event-id",
-                        Encoding.UTF8.GetBytes(eventId)
-                    },
-                    {
-                        "event-type",
-                        Encoding.UTF8.GetBytes(eventType)
-                    }
+                    { "correlation-id", Encoding.UTF8.GetBytes(correlationId) },
+                    { "event-id", Encoding.UTF8.GetBytes(eventId) },
+                    { "event-type", Encoding.UTF8.GetBytes(eventType) }
                 };
 
 
@@ -73,14 +62,12 @@ namespace PlatformService.AsyncDataServices
             {
                 var result = await _producer.ProduceAsync(_topic, message, cancellationToken);
 
-                _logger.LogInformation(
-                    "Published Kafka event. PlatformId={PlatformId}, Topic={Topic}, " +
-                    "Partition={Partition}, Offset={Offset}, CorrelationId={CorrelationId}",
+                _logger.LogInformation( "Published Kafka outbox event. EventId={EventId}, PlatformId={PlatformId}, Topic={Topic}, Partition={Partition}, Offset={Offset}",
+                    eventId,
                     platformPublishedDto.Id,
                     result.Topic,
                     result.Partition.Value,
-                    result.Offset.Value,
-                    correlationId);
+                    result.Offset.Value);
             }
             ////ProduceException<string, string>  Represents an error that occured whilst producing a message.
             catch (ProduceException<string, string> ex)

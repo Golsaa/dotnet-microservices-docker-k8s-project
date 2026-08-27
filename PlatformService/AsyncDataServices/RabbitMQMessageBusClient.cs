@@ -7,7 +7,7 @@ using System.Text.Json;
 
 namespace PlatformService.AsyncDataServices
 {
-    public class MessageBusClient : IMessageBusClient, IAsyncDisposable
+    public class MessageBusClient : IAsyncDisposable // IMessageBusClient, 
     {
         private readonly ConnectionFactory _factory;
 

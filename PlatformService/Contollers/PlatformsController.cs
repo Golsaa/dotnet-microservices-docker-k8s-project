@@ -6,6 +6,7 @@ using PlatformService.Models;
 using PlatformService.SyncDataServices.Http;
 using PlatformService.AsyncDataServices;
 using Asp.Versioning;
+using System.Text.Json;
 
 namespace PlatformService.Controllers
 {
@@ -24,21 +25,21 @@ namespace PlatformService.Controllers
     [ApiController]
     public class PlatformsController : ControllerBase
     {
+        private readonly AppDbContext _context;
         private readonly IPlatformRepo _repository;
-        private readonly ICommandDataClient _commandDataClient;
         private readonly IMapper _mapper;
         private readonly  IMessageBusClient _messageBusClient; 
         private readonly ILogger<PlatformsController> _logger;
 
         public PlatformsController(
+            AppDbContext context,
             IPlatformRepo repository, 
-            ICommandDataClient commandDataClient,
             IMapper mapper,
             IMessageBusClient messageBusClient,
-             ILogger<PlatformsController> logger)
+            ILogger<PlatformsController> logger)
             {
+            _context = context;
             _repository = repository;
-            _commandDataClient = commandDataClient;
             _mapper = mapper;
             _messageBusClient = messageBusClient;
             _logger = logger;
@@ -64,8 +65,48 @@ namespace PlatformService.Controllers
             return NotFound();
         }
 
+
         [HttpPost]
-        public async Task<ActionResult<PlatformReadDto>> CreatePlatform(PlatformCreateDto platformCreateDto)
+        public async Task<ActionResult<PlatformReadDto>> CreatePlatform( PlatformCreateDto platformCreateDto,
+            CancellationToken cancellationToken)
+        {
+            var platform = _mapper.Map<Platform>(platformCreateDto);
+
+            _context.Platforms.Add(platform);
+
+            var publishedEvent = _mapper.Map<PlatformPublishedDto>(platform);
+            publishedEvent.Event = "Platform_Published";
+
+            var outboxMessage = new OutboxMessage
+            {
+                Type = "PlatformPublished.v1",
+                Payload = JsonSerializer.Serialize(publishedEvent),
+                CorrelationId = HttpContext.TraceIdentifier
+            };
+
+            _context.OutboxMessages.Add(outboxMessage);
+
+            // EF Core sends both inserts to SQL Server as one unit of work. 
+            // If the database save fails, neither the platform nor the outbox event should be committed. 
+            // If Kafka is temporarily unavailable later, the outbox row stays pending and the processor retries it.
+            await _context.SaveChangesAsync(cancellationToken);
+
+            var platformReadDto = _mapper.Map<PlatformReadDto>(platform);
+
+            _logger.LogInformation(
+                "Platform and outbox event saved. PlatformId={PlatformId}, EventId={EventId}, CorrelationId={CorrelationId}",
+                platform.Id,
+                outboxMessage.Id,
+                outboxMessage.CorrelationId);
+
+            return CreatedAtRoute(
+                "GetPlatformById",
+                new { id = platformReadDto.Id },
+                platformReadDto);
+        }
+
+        [HttpPost("experiments/direct-kafka")]
+        public async Task<ActionResult<PlatformReadDto>> CreatePlatformNoOutboxSupport(PlatformCreateDto platformCreateDto)
         {
             var platformModel = _mapper.Map<Platform>(platformCreateDto);
              _repository.CreatePlatform(platformModel);
@@ -76,16 +117,7 @@ namespace PlatformService.Controllers
             _logger.LogInformation("Platform created. PlatformId={PlatformId}, Name={PlatformName}",
                 platformReadDto.Id, platformReadDto.Name);
 
-            //Send Sync Message
-            /*try
-            {
-               await _commandDataClient.SendPlatformToCommand(platformReadDto);
-            }
-            catch(Exception ex)
-            {
-               _logger.LogDebug( $"--> Could not send synchronously: {ex.Message}");
-            }*/
-
+        
             //Send Async MEssage
             try
             {
@@ -94,7 +126,7 @@ namespace PlatformService.Controllers
 
                var correlationId = HttpContext.TraceIdentifier;
 
-               await _messageBusClient.PublishNewPlatformAsync(platformPublishedDto, correlationId);
+               await _messageBusClient.PublishNewPlatformAsync(platformPublishedDto, correlationId, Guid.NewGuid().ToString("N"));
             }
             catch(Exception ex)
             {

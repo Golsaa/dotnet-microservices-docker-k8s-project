@@ -4,6 +4,6 @@ namespace PlatformService.AsyncDataServices
 {
     public interface  IMessageBusClient
     {
-        Task PublishNewPlatformAsync(PlatformPublishedDto platformPublishedDto, string correlationId, CancellationToken cancellationToken = default);
+        Task PublishNewPlatformAsync(PlatformPublishedDto platformPublishedDto, string correlationId, string eventId, CancellationToken cancellationToken = default);
     }
 }
