@@ -6,6 +6,8 @@
 # Local configuration / secrets
 .env
 .env.*
+appsettings.Development.json
+appsettings.Production.json
 
 # Kubernetes secret files
 #*-secret.yaml
