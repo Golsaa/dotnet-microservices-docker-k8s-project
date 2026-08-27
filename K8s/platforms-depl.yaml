@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: platformservice
-          image: gomore2/platformservice:v5
+          image: gomore2/platformservice:v6-api-versioning
 
           env:
             - name: Kafka__BootstrapServers

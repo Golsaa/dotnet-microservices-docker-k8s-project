@@ -7,6 +7,7 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Logs;
+using Asp.Versioning;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -55,7 +56,8 @@ builder.Services.AddOpenApi();
 
 builder.Services.AddScoped<IPlatformRepo, PlatformRepo>();
 
-//builder.Services.AddSingleton<IMessageBusClient, MessageBusClient>();
+//The Kafka producer registration should be a singleton, 
+//because IProducer is thread-safe, costly to create, and is correctly disposed when the application stops:
 builder.Services.AddSingleton<IMessageBusClient, KafkaMessageBusClient>();
 
 builder.Services.AddAutoMapper(
@@ -65,6 +67,20 @@ builder.Services.AddAutoMapper(
 builder.Services.AddHttpClient<ICommandDataClient, HttpCommandDataClient>();
 
 builder.Services.AddControllers();
+
+builder.Services
+    .AddApiVersioning(options =>
+    {
+        options.DefaultApiVersion = new ApiVersion(1, 0);
+        options.AssumeDefaultVersionWhenUnspecified = false;
+        options.ReportApiVersions = true;
+    })
+    .AddMvc()
+   .AddApiExplorer(options =>
+    {
+        options.GroupNameFormat = "'v'VVV";
+        options.SubstituteApiVersionInUrl = true;
+    });
 
 Console.WriteLine($"--> Command Service URL: {builder.Configuration["CommandService"]}");
 

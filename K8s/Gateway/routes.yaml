@@ -15,7 +15,7 @@ spec:
     - matches:
         - path:
             type: PathPrefix
-            value: /api/platforms
+            value: /api/v1/platforms
 
       backendRefs:
         - name: platforms-clusterip-srv
