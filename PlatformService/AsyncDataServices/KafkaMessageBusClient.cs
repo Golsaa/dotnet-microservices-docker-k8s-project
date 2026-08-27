@@ -10,13 +10,15 @@ namespace PlatformService.AsyncDataServices
     {
         private readonly IProducer<string, string> _producer;
         private readonly string _topic;
+        private readonly ILogger<KafkaMessageBusClient> _logger;
 
-        public KafkaMessageBusClient(IConfiguration configuration)
+        public KafkaMessageBusClient(IConfiguration configuration, ILogger<KafkaMessageBusClient> logger)
         {
             var bootstrapServers = configuration["Kafka:BootstrapServers"] ??
                                      throw new InvalidOperationException("Kafka BootstrapServers is not configured.");
 
             _topic = configuration["Kafka:Topic"] ?? "platform-published";
+            _logger = logger;
 
             var config = new ProducerConfig
             {
@@ -71,19 +73,22 @@ namespace PlatformService.AsyncDataServices
             {
                 var result = await _producer.ProduceAsync(_topic, message, cancellationToken);
 
-                Console.WriteLine("Published {_topic} event. PlatformId={PlatformId}, Topic={Topic}, Partition={Partition}, Offset={Offset}, CorrelationId={CorrelationId}",
-                _topic,
-                platformPublishedDto.Id,
-                result.Topic,
-                result.Partition.Value,
-                result.Offset.Value,
-                correlationId);
+                _logger.LogInformation(
+                    "Published Kafka event. PlatformId={PlatformId}, Topic={Topic}, " +
+                    "Partition={Partition}, Offset={Offset}, CorrelationId={CorrelationId}",
+                    platformPublishedDto.Id,
+                    result.Topic,
+                    result.Partition.Value,
+                    result.Offset.Value,
+                    correlationId);
             }
             ////ProduceException<string, string>  Represents an error that occured whilst producing a message.
             catch (ProduceException<string, string> ex)
             {
-                Console.WriteLine($"--> Kafka publish failed: {ex.Error.Reason}");
-                throw;
+               _logger.LogError(ex,"Kafka publish failed. Topic={Topic}, PlatformId={PlatformId}",
+                    _topic, platformPublishedDto.Id);
+
+                    throw;
             }
         }
 
